@@ -1,0 +1,314 @@
+---
+- hosts: postgres
+  remote_user: redhat
+  become: true
+  tasks:
+    - name: 01. Install Packages
+      yum:
+        name:
+        - gcc
+        - readline-devel
+        - zlib-devel
+        - make
+        state: present
+
+    - name: 02. Create Group dbgrp
+      group:
+        name: dbgrp
+        gid: 3000
+
+    - name: 03. Create User
+      user:
+        name: "{{ os_user_name }}"
+        password: "{{ os_user_pass | password_hash('sha512') }}"
+        shell: /bin/bash
+        uid: "{{ uid }}"
+        group: dbgrp
+        expires: -1
+        home: /home/{{ os_user_name }}
+
+    - name: 04. set users password valid time
+      shell: chage -I -1 -m 0 -M 99999 -E -1 "{{ os_user_name }}"
+
+    - name: 05. prepare Source dir
+      file:
+        path: /Source
+        owner: root
+        group: root
+        mode: 0777
+        state: directory
+
+    - name: 06. Copy Package Postgres to Client
+      copy:
+        src: /home/ubuntu/ansible/postgres/source/postgresql-12.1.tar.gz
+        dest: /Source
+
+    - name: 07. prepare /data dir
+      file:
+        path: /data
+        owner: root
+        group: root
+        mode: 0777
+        state: directory
+
+    - name: 08. Extract tar files
+      unarchive:
+        src: /Source/postgresql-12.1.tar.gz
+        dest: /Source/
+        owner: "{{ os_user_name }}"
+        group: dbgrp
+        mode: 0777
+        remote_src: yes
+
+    - name: 09. Change file ownership, group and permissions
+      file:
+        path: /data/DB/postgresql/{{ os_user_name }}
+        state: directory
+        #recurse: yes
+        owner: "{{ os_user_name }}"
+        group: dbgrp
+        mode: 0770
+      tags: repair
+    - name: 10. prepare source dir
+      file:
+        path: "{{ item }}"
+        mode: 0760
+        state: directory
+        recurse: yes
+      with_items:
+        - /data/DB/postgresql/{{ os_user_name }}
+        - /data/DB/postgresql/{{ os_user_name }}/etc
+        - /data/DB/postgresql/{{ os_user_name }}/db
+        - /data/DB/postgresql/{{ os_user_name }}/log
+        - /data/DB/postgresql/{{ os_user_name }}/log/pg_log
+        - /data/DB/postgresql/{{ os_user_name }}/log/pg_wal
+        - /data/DB/postgresql/{{ os_user_name }}/log/pg_archive
+
+    - name: 11. Change file ownership, group and permissions
+      shell: chown -R {{ os_user_name }}:{{ os_group }} /data/DB/postgresql/{{ os_user_name }}
+        
+    - name: 12. Insert or Update .bashrc
+      blockinfile:
+        path: /home/{{ os_user_name }}/.bashrc
+        block: |
+          LD_LIBRARY_PATH=/data/DB/postgresql/{{ os_user_name }}/etc/lib
+          PATH=/usr/bin/:/data/DB/postgresql/{{ os_user_name }}/etc/bin:$PATH
+          PGPORT={{ pg_port }}
+          PGDATABASE={{ pg_db }}
+          PGUSER={{ pg_user }}
+          PGTZ=Asia/Bangkok
+
+          export LD_LIBRARY_PATH
+          export PATH
+          export PGPORT
+          export PGDATABASE
+          export PGUSER
+          export PGTZ
+
+    - name: 13. Run a command as the {{ os_user_name }} user
+      become_user: "{{ os_user_name }}"
+      file:
+        path: /Source/postgresql-12.1/build_dir_{{ os_user_name }}
+        owner: "{{ os_user_name }}"
+        group: dbgrp
+        mode: 0700
+        state: directory
+      
+    - name: 14. Configure Source File
+      command: ../configure --prefix=/data/DB/postgresql/{{ os_user_name }}/etc --with-pgport={{ pg_port }}
+      become_user: "{{ os_user_name }}"
+      args:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}
+
+    - name: 15. Compile Source File
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}
+      
+    - name: 16. Install PostgreSQL
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}
+        target: install
+            
+    - name: 17. Install Additionall Extension pg_buffercache
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}/contrib/pg_buffercache
+        target: install
+      
+    - name: 18. Install Additionall Extension adminpack
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}/contrib/adminpack
+        target: install
+      
+    - name: 19. Install Additionall Extension pg_stat_statements
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}/contrib/pg_stat_statements
+        target: install
+      
+    - name: 20. Install Additionall Extension pgstattuple
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}/contrib/pgstattuple
+        target: install
+      
+    - name: 21. Install Additionall Extension file_fdw
+      become_user: "{{ os_user_name }}"
+      make:
+        chdir: /Source/postgresql-12.1/build_dir_{{ os_user_name }}/contrib/file_fdw
+        target: install
+      
+#    - name: 19. Create a symbolic link
+#      become_user: "{{ os_user_name }}"
+#      file:
+#        src: /sbin/ldconfig
+#        dest: /data/DB/postgresql/{{ os_user_name }}/etc/lib
+#        state: link
+#`        force: yes
+
+    - name: 22. Initial database cluster
+      shell: initdb -D "{{ pg_home }}/etc/data"
+      become_user: "{{ os_user_name }}"
+      environment:
+        LD_LIBRARY_PATH: "{{ pg_home }}/etc/lib"
+        PATH: "{{ pg_home }}/etc/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games:/snap/bin"
+        PGPORT: "{{ pg_port }}"
+        PGDATABASE: "{{ pg_db }}"
+        PGUSER: "{{ pg_user }}"
+        PGTZ: "Asia/Bangkok"
+         
+    - name: 23. Insert or Update pg_hba.conf
+      become_user: "{{ os_user_name }}"
+      blockinfile:
+        path: /data/DB/postgresql/{{ os_user_name }}/etc/data/pg_hba.conf
+        block: |
+          # Additional option
+          host    all             all             0.0.0.0/0               md5
+        
+    - name: 24. Change password authentication policy
+      become_user: "{{ os_user_name }}"
+      shell: sed -i "s/127.0.0.1\/32            trust/127.0.0.1\/32            md5/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/pg_hba.conf
+        
+    - name: 25. create stop/start script
+      file:
+        path: /etc/init.d/postgres_{{ os_user_name }}
+        state: touch
+        owner: "{{ os_user_name }}"
+        group: dbgrp
+        mode: u=rwx,g=r,o=r
+        
+    - name: 26. Change password authentication policy
+      become_user: "{{ os_user_name }}"
+      shell: sed -i "s/\:\:1\/128                 trust/\:\:1\/128                 md5/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/pg_hba.conf
+        
+    - name: 27. create stop/start script
+      blockinfile:
+        path: /etc/init.d/postgres_{{ os_user_name }}
+        block: |
+          #!/bin/bash
+          function stop_postgresql() {
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data stop'
+          }
+          function start_postgresql() {
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data -l /data/DB/postgresql/{{ os_user_name }}/log/pg_log/pg_server.log start'
+          }
+          function restart_postgresql() {
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data stop'
+                  sleep 5
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data -l /data/DB/postgresql/{{ os_user_name }}/log/pg_log/pg_server.log start'
+          }
+          function status_postgresql() {
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data status'
+          }
+          function reload_postgresql() {
+                  su {{ os_user_name }} -c '/data/DB/postgresql/{{ os_user_name }}/etc/bin/pg_ctl -D /data/DB/postgresql/{{ os_user_name }}/etc/data reload'
+          }
+          case $1 in
+              start)
+                  start_postgresql
+                  exit $?
+                  ;;
+              stop)
+                 stop_postgresql
+                  exit $?
+                  ;;
+              status)
+                  status_postgresql
+                  exit $?
+                  ;;
+              restart)
+                 restart_postgresql
+                  exit $?
+                  ;;
+              reload)
+                  restart_postgresql
+                  exit $?
+                  ;;
+              *)
+                  echo "Usage: $0 {start|stop|restart|status|reload}"
+                  exit 2
+          esac
+          exit 0
+        
+    - name: 28. Backup database configuration and Parameter tunning
+      become_user: "{{ os_user_name }}"
+      shell: |
+        cp -p /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf.$(date +%Y%m%d)
+        sed -i "s/#listen_addresses = 'localhost'/listen_addresses = '*'/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/max_connections = 100/max_connections = 500/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#superuser_reserved_connections = 3/superuser_reserved_connections = 10/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/shared_buffers = 128MB/shared_buffers = 1536MB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#work_mem = 4MB/work_mem = 3145kB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#maintenance_work_mem = 64MB/maintenance_work_mem = 384MB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#wal_buffers = -1/wal_buffers = 16MB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#temp_buffers = 8MB/temp_buffers = 8MB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#effective_cache_size = 4GB/effective_cache_size = 4608MB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#shared_preload_libraries = ''/shared_preload_libraries = 'pg_stat_statements'/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/min_wal_size = 80MB/min_wal_size = 2GB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/max_wal_size = 1GB/max_wal_size = 4GB/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#checkpoint_timeout = 5min/checkpoint_timeout = 5min/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#checkpoint_completion_target = 0.5/checkpoint_completion_target = 0.9/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#bgwriter_delay = 200ms/bgwriter_delay = 200ms/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#bgwriter_lru_maxpages = 100/bgwriter_lru_maxpages = 100/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#bgwriter_lru_multiplier = 2.0/bgwriter_lru_multiplier = 2.0/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#max_worker_processes = 8/max_worker_processes = 3/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#autovacuum_max_workers = 3/autovacuum_max_workers = 3/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#default_statistics_target = 100/default_statistics_target = 100/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#random_page_cost = 4.0/random_page_cost = 1.1/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#effective_io_concurrency = 1/effective_io_concurrency = 200/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#log_line_prefix = '%m \[%p\] '/log_line_prefix = '%m %t %u \[%p\] %x '/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#log_directory = 'log'/log_directory = '\/data\/DB\/postgresql\/{{ os_user_name }}\/log\/pg_log'/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#max_wal_senders = 10/max_wal_senders = 10/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#wal_level = replica/wal_level = archive/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#archive_mode = off/archive_mode = on/g" /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+        sed -i "s/#archive_command = ''/archive_command = \'cp -i %p \/data\/DB\/postgresql\/{{ os_user_name }}\/log\/pg_archive\/%f <\/dev\/null \'/g " /data/DB/postgresql/{{ os_user_name }}/etc/data/postgresql.conf
+
+    - name: 29. Start Postgres
+      become_user: "{{ os_user_name }}"
+      shell: /etc/init.d/postgres_{{ os_user_name }} start
+
+    - name: 30. Create Database Folder
+      become_user: "{{ os_user_name }}"
+      file:
+        path: /data/DB/postgresql/{{ os_user_name }}/db/{{ pg_db }}
+        mode: 0770
+        state: directory
+
+    - name: 31. create Tablespace
+      become_user: extraw
+      shell: |
+        psql -d postgres -c "CREATE TABLESPACE dbspace_{{ pg_db }} OWNER {{ os_user_name }} LOCATION '/data/DB/postgresql/{{ os_user_name }}/db/{{ pg_db}}' "
+        psql -d postgres -c "CREATE DATABASE {{ pg_db }} OWNER os_user_name TABLESPACE dbspace_{{ pg_db }}"
+      args:
+        chdir: "/"
+      tags: Tablespace
+      
+#    - name: 02 create Tablespace
+#      become_user: "{{ os_user_name }}"
+#      command: psql -d postgres -c "CREATE TABLESPACE dbspace_raw OWNER extraw LOCATION '/data/DB/postgresql/extraw/db/raw' "
+#      args:
+#        executable: /bin/bash
+#      tags: repair
