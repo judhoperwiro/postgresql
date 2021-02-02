@@ -346,7 +346,7 @@ sed -i "s/#archive_command = ''/archive_command = \'cp -i %p \/data\/DB\/postgre
 exit
 ``` 
 - Start Database Cluster.
-user root
+- user root
 ``` 
 sudo /etc/init.d/postgres_<instname> start
 
