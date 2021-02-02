@@ -40,7 +40,7 @@
 
     - name: 06. Copy Package Postgres to Client
       copy:
-        src: /home/ubuntu/ansible/postgres/source/postgresql-12.1.tar.gz
+        src: /data/ansible/postgres/source/postgresql-12.1.tar.gz
         dest: /Source
 
     - name: 07. prepare /data dir
