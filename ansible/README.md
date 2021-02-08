@@ -20,5 +20,5 @@ ansible-playbook -i inventory-<username> install-postgres-12-1.yaml
 
 ### 3.) Limitiation  
 ```shell 
-Cannot start postgres, database and tablespace using ansible
+Cannot start postgres, database and tablespace using ansible on RHEL7
 ```
