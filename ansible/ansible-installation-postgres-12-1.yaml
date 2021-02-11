@@ -297,6 +297,15 @@
         mode: 0770
         state: directory
 
+    - name: 31. Create DB directory
+      file:
+        path: /data/DB/postgresql/{{ os_user_name }}/db/{{ pg_db }}
+        owner: {{ os_user_name }}
+        group: dbgrp
+        mode: 0750
+        state: directory
+        tags: tablespace
+        
     - name: 31. create Tablespace
       become_user: extraw
       shell: |
@@ -304,7 +313,7 @@
         psql -d postgres -c "CREATE DATABASE {{ pg_db }} OWNER os_user_name TABLESPACE dbspace_{{ pg_db }}"
       args:
         chdir: "/"
-      tags: Tablespace
+      tags: tablespace
       
 #    - name: 02 create Tablespace
 #      become_user: "{{ os_user_name }}"
